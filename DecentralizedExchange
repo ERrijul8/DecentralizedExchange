@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract DecentralizedExchange is Ownable {
+    // Struct for Order
+    struct Order {
+        uint256 id;
+        address user;
+        address token; // Token to buy or sell
+        bool isBuy; // True for buy order, false for sell order
+        uint256 amount; // Amount of tokens
+        uint256 price; // Price in wei (for ETH)
+        bool isActive;
+    }
+
+    // Counters
+    uint256 private nextOrderId = 1;
+
+    // Mappings
+    mapping(address => uint256) public userBalances; // ETH balances
+    mapping(address => mapping(address => uint256)) public tokenBalances; // Token balances (user => token => amount)
+    mapping(uint256 => Order) public orders; // Order ID to Order
+    mapping(address => uint256[]) public userOrders; // User to list of their order IDs
+
+    // Events
+    event Deposited(address indexed user, address indexed token, uint256 amount);
+    event Withdrawn(address indexed user, address indexed token, uint256 amount);
+    event OrderCreated(uint256 indexed orderId, address indexed user, address token, bool isBuy, uint256 amount, uint256 price);
+    event OrderCancelled(uint256 indexed orderId);
+    event OrderMatched(uint256 indexed buyOrderId, uint256 indexed sellOrderId, uint256 amount, uint256 price);
+
+    constructor() Ownable(msg.sender) {}
+
+    // Deposit ETH
+    function depositETH() external payable {
+        require(msg.value > 0, "Must deposit non-zero ETH");
+        userBalances[msg.sender] += msg.value;
+        emit Deposited(msg.sender, address(0), msg.value);
+    }
+
+    // Deposit ERC-20 tokens
+    function depositToken(address token, uint256 amount) external {
+        require(amount > 0, "Must deposit non-zero amount");
+        require(IERC20(token).transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+        tokenBalances[msg.sender][token] += amount;
+        emit Deposited(msg.sender, token, amount);
+    }
+
+    // Withdraw ETH
+    function withdrawETH(uint256 amount) external {
+        require(amount > 0, "Must withdraw non-zero amount");
+        require(userBalances[msg.sender] >= amount, "Insufficient ETH balance");
+        userBalances[msg.sender] -= amount;
+        payable(msg.sender).transfer(amount);
+        emit Withdrawn(msg.sender, address(0), amount);
+    }
+
+    // Withdraw ERC-20 tokens
+    function withdrawToken(address token, uint256 amount) external {
+        require(amount > 0, "Must withdraw non-zero amount");
+        require(tokenBalances[msg.sender][token] >= amount, "Insufficient token balance");
+        tokenBalances[msg.sender][token] -= amount;
+        require(IERC20(token).transfer(msg.sender, amount), "Token transfer failed");
+        emit Withdrawn(msg.sender, token, amount);
+    }
+
+    // Create a buy or sell order
+    function createOrder(address token, bool isBuy, uint256 amount, uint256 price) external returns (uint256) {
+        require(amount > 0, "Amount must be non-zero");
+        require(price > 0, "Price must be non-zero");
+
+        if (isBuy) {
+            require(userBalances[msg.sender] >= amount * price, "Insufficient ETH balance");
+        } else {
+            require(tokenBalances[msg.sender][token] >= amount, "Insufficient token balance");
+        }
+
+        uint256 orderId = nextOrderId++;
+        orders[orderId] = Order(orderId, msg.sender, token, isBuy, amount, price, true);
+        userOrders[msg.sender].push(orderId);
+
+        emit OrderCreated(orderId, msg.sender, token, isBuy, amount, price);
+        return orderId;
+    }
+
+    // Cancel an order
+    function cancelOrder(uint256 orderId) external {
+        require(orders[orderId].isActive, "Order not active");
+        require(orders[orderId].user == msg.sender || owner() == msg.sender, "Not authorized");
+        orders[orderId].isActive = false;
+        emit OrderCancelled(orderId);
+    }
+
+    // Match a buy and sell order
+    function matchOrders(uint256 buyOrderId, uint256 sellOrderId) external onlyOwner {
+        Order memory buyOrder = orders[buyOrderId];
+        Order memory sellOrder = orders[sellOrderId];
+
+        require(buyOrder.isActive && sellOrder.isActive, "Orders must be active");
+        require(buyOrder.isBuy && !sellOrder.isBuy, "Invalid order pair");
+        require(buyOrder.token == sellOrder.token, "Token mismatch");
+        require(buyOrder.price >= sellOrder.price, "Price mismatch");
+        require(buyOrder.amount > 0 && sellOrder.amount > 0, "Invalid amounts");
+
+        // Determine trade amount (minimum of buy and sell amounts)
+        uint256 tradeAmount = buyOrder.amount < sellOrder.amount ? buyOrder.amount : sellOrder.amount;
+        uint256 tradePrice = sellOrder.price; // Use sell order price
+
+        // Update balances
+        // Buyer: deduct ETH, add tokens
+        userBalances[buyOrder.user] -= tradeAmount * tradePrice;
+        tokenBalances[buyOrder.user][buyOrder.token] += tradeAmount;
+
+        // Seller: deduct tokens, add ETH
+        tokenBalances[sellOrder.user][sellOrder.token] -= tradeAmount;
+        userBalances[sellOrder.user] += tradeAmount * tradePrice;
+
+        // Update order amounts
+        orders[buyOrderId].amount -= tradeAmount;
+        orders[sellOrderId].amount -= tradeAmount;
+
+        // Deactivate orders if fully filled
+        if (orders[buyOrderId].amount == 0) {
+            orders[buyOrderId].isActive = false;
+        }
+        if (orders[sellOrderId].amount == 0) {
+            orders[sellOrderId].isActive = false;
+        }
+
+        emit OrderMatched(buyOrderId, sellOrderId, tradeAmount, tradePrice);
+    }
+
+    // Get order details
+    function getOrder(uint256 orderId)
+        external
+        view
+        returns (
+            address user,
+            address token,
+            bool isBuy,
+            uint256 amount,
+            uint256 price,
+            bool isActive
+        )
+    {
+        require(orders[orderId].id != 0, "Order does not exist");
+        Order memory order = orders[orderId];
+        return (order.user, order.token, order.isBuy, order.amount, order.price, order.isActive);
+    }
+
+    // Get user's orders
+    function getUserOrders(address user) external view returns (uint256[] memory) {
+        return userOrders[user];
+    }
+
+    // Get user balances
+    function getBalances(address user, address token) external view returns (uint256 ethBalance, uint256 tokenBalance) {
+        return (userBalances[user], tokenBalances[user][token]);
+    }
+}
