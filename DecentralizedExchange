@@ -151,13 +151,4 @@ contract DecentralizedExchange is Ownable {
         return (order.user, order.token, order.isBuy, order.amount, order.price, order.isActive);
     }
 
-    // Get user's orders
-    function getUserOrders(address user) external view returns (uint256[] memory) {
-        return userOrders[user];
-    }
-
-    // Get user balances
-    function getBalances(address user, address token) external view returns (uint256 ethBalance, uint256 tokenBalance) {
-        return (userBalances[user], tokenBalances[user][token]);
-    }
-}
+ 
