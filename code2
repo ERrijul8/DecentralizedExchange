@@ -1,0 +1,10 @@
+   returns (
+            address user,
+            address token,
+            bool isBuy,
+            uint256 amount,
+            uint256 price,
+            bool isActive
+        )
+    {
+        require(orders[orderId].id != 0, "Order does not exist");
