@@ -137,16 +137,7 @@ contract DecentralizedExchange is Ownable {
     function getOrder(uint256 orderId)
         external
         view
-        returns (
-            address user,
-            address token,
-            bool isBuy,
-            uint256 amount,
-            uint256 price,
-            bool isActive
-        )
-    {
-        require(orders[orderId].id != 0, "Order does not exist");
+     
         Order memory order = orders[orderId];
         return (order.user, order.token, order.isBuy, order.amount, order.price, order.isActive);
     }
